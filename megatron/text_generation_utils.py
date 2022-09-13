@@ -27,8 +27,11 @@ import torch.nn.functional as F
 
 from megatron import print_rank_0
 from megatron import mpu
-from megatron.utils import get_ltor_masks_and_position_ids, is_mp_rank_0
+from megatron.utils import get_ltor_masks_and_position_ids, is_mp_rank_0, is_local_main
 
+import threading
+from flask import Flask, request
+from flask_restful import Resource, Api
 
 def get_batch(neox_args, context_tokens: torch.Tensor):
     """
@@ -627,6 +630,122 @@ def generate_samples_input_from_file(
                 f_out.write(json.dumps(item) + "\n")
     print_rank_0("generate_samples_input_from_file() done")
     return generated_texts
+
+
+def generate_samples_from_request(
+    neox_args,
+    model,
+    eos_token_id: int = None,
+    recompute: bool = False,
+):
+    """
+    Generates samples from a GET request and returns them in json format using HTTP.
+
+    neox_args: NeoXArgs.
+    model: a Megatron model
+
+    eos_token_id: end of text token at which completion is terminated, even if max_tokes count has not been reached
+    recompute: flag indicating whether a cache is used for already forwarded tokens (true) or whether all tokens are recomputed at every iteration (false)
+
+    returns: List[dict] -> a list of dicts containing the following fields:
+        - 'context' (the input)
+        - 'text' (the completion)
+        - 'length' (the length of the completion in number of tokens)
+        - 'finished':
+        - 'message': a messaged associated with the generation procedure, can be a warning or error
+        - 'duration_seconds': duration of the generation in seconds
+    """
+
+    QUESTION, ANSWER, PARAMS = "question.txt", "answer.txt", "params.txt"
+
+    class handle(Resource):
+        def gpt_params(self):
+            values = dict(
+                temperature = 0.0,
+                top_k = 0,
+                top_p = 0.0,
+                maximum_tokens = 64,
+            )
+
+            # update values from the request
+            args = request.args
+            for k in values:
+                if k in args:
+                    try:
+                        val = type(values[k])(args[k])
+                        values[k] = val
+                    except Exception as e:
+                        print(e)
+
+            return values
+
+        def get(self, context):
+            context = context.strip()
+            if context == "":
+                return {}
+
+            while os.path.exists(QUESTION):
+                time.sleep(0.2)
+
+            with open(PARAMS, "w") as f:
+                f.write(json.dumps(self.gpt_params()))
+
+            with open(QUESTION, "w") as f:
+                f.write(context)
+
+            generated_texts = []
+            while not os.path.exists(ANSWER):
+                time.sleep(0.2)
+
+            with open(ANSWER) as f:
+                generated_texts = json.loads(f.read())
+
+            os.remove(ANSWER)
+
+            return generated_texts
+
+    def start_flask():
+        app = Flask("gptneo")
+        api = Api(app)
+        api.add_resource(handle, "/<string:context>")
+        app.run(host="0.0.0.0", port=8000)
+
+    if is_local_main():
+        for f in [QUESTION, ANSWER, PARAMS]:
+            if os.path.exists(f):
+                os.remove(f)
+
+        threading.Thread(target=start_flask).start()
+
+    while True:
+        if not os.path.exists(QUESTION):
+            time.sleep(0.2)
+            continue
+
+        model.module.clear_cache()  # clear kv cache between batches
+        torch.distributed.barrier(group=mpu.get_model_parallel_group())
+
+        with open(QUESTION, "r") as f:
+            prompts = f.read().strip()
+
+        with open(PARAMS, "r") as f:
+            gpt_params = json.loads(f.read())
+
+        generated_texts = generate_samples_from_prompt(
+            neox_args=neox_args,
+            model=model,
+            text=prompts,
+            eos_token_id=eos_token_id,
+            recompute=recompute,
+            **gpt_params,
+        )
+
+        if is_local_main():
+            with open(ANSWER, "w") as f:
+                f.write(json.dumps(generated_texts))
+            os.remove(QUESTION)
+            os.remove(PARAMS)
+        time.sleep(1)
 
 
 def generate_samples_unconditional(

@@ -1,8 +1,8 @@
 # Parameters used for text generation
 # Make sure `load` is specified somewhere else
 {
-  # Text gen type: `input-file`, `unconditional` or `interactive`
-  "text-gen-type": "unconditional",
+  # Text gen type: `input-file`, `unconditional`, `interactive` or `request`
+  "text-gen-type": "request",
 
   # Params for all
   "maximum_tokens": 102,

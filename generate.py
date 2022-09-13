@@ -22,6 +22,7 @@ from megatron.text_generation_utils import (
     generate_samples_from_prompt,
     generate_samples_unconditional,
     generate_samples_interactive,
+    generate_samples_from_request,
 )
 
 
@@ -78,6 +79,12 @@ def main():
             top_p=neox_args.top_p,
         )
 
+    elif neox_args.text_gen_type == "request":
+        generate_samples_from_request(
+            neox_args=neox_args,
+            model=model,
+            recompute=neox_args.recompute,
+        )
     else:
         raise ValueError(
             f"`text-gen-type` either not specified or not recognised: {neox_args.text_gen_type}"
