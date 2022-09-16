@@ -745,8 +745,9 @@ def generate_samples_from_request(
         )
 
         if is_local_main():
+            data = generated_texts if len(generated_texts) != 1 else generated_texts[0]
             with open(ANSWER, "w") as f:
-                f.write(json.dumps(generated_texts))
+                f.write(json.dumps(data))
             os.remove(QUESTION)
             os.remove(PARAMS)
         time.sleep(1)
