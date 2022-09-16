@@ -31,7 +31,7 @@ from megatron.utils import get_ltor_masks_and_position_ids, is_mp_rank_0, is_loc
 
 import threading
 from flask import Flask, request
-from flask_restful import Resource, Api
+from flask_restful import Resource, Api, reqparse
 
 def get_batch(neox_args, context_tokens: torch.Tensor):
     """
@@ -658,8 +658,18 @@ def generate_samples_from_request(
 
     QUESTION, ANSWER, PARAMS = "question.txt", "answer.txt", "params.txt"
 
+    # json parser
+    parser = reqparse.RequestParser()
+    parser.add_argument("prompt", type=str)
+    parser.add_argument("temperature", type=float, default=0.0)
+    parser.add_argument("top_k", type=int, default=0)
+    parser.add_argument("maximum_tokens", type=int, default=64)
+    parser.add_argument("top_p", type=float, default=0.0)
+    parser.add_argument("stop_sequence", type=str, default="\n")
+
     class handle(Resource):
-        def gpt_params(self):
+        @staticmethod
+        def gpt_params(args):
             values = dict(
                 temperature = 0.0,
                 top_k = 0,
@@ -669,7 +679,6 @@ def generate_samples_from_request(
             )
 
             # update values from the request
-            args = request.args
             for k in values:
                 if k in args:
                     try:
@@ -693,8 +702,37 @@ def generate_samples_from_request(
                 time.sleep(0.2)
 
             with open(PARAMS, "w") as f:
-                f.write(json.dumps(self.gpt_params()))
+                f.write(json.dumps(self.gpt_params(request.args)))
 
+            with open(QUESTION, "w") as f:
+                f.write(context)
+
+            generated_texts = []
+            while not os.path.exists(ANSWER):
+                time.sleep(0.2)
+
+            with open(ANSWER) as f:
+                generated_texts = json.loads(f.read())
+
+            os.remove(ANSWER)
+
+            return generated_texts
+
+        def post(self, context=None):
+            request.get_json(force=True)
+            args = parser.parse_args()
+            if "prompt" in args:
+                context = args["prompt"]
+
+            if context is None:
+                return {}
+
+            while os.path.exists(QUESTION):
+                time.sleep(0.2)
+
+            with open(PARAMS, "w") as f:
+                f.write(json.dumps(self.gpt_params(args)))
+            
             with open(QUESTION, "w") as f:
                 f.write(context)
 
