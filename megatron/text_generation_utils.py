@@ -665,6 +665,7 @@ def generate_samples_from_request(
                 top_k = 0,
                 top_p = 0.0,
                 maximum_tokens = 64,
+                eos_token_id = eos_token_id,
             )
 
             # update values from the request
@@ -676,6 +677,10 @@ def generate_samples_from_request(
                         values[k] = val
                     except Exception as e:
                         print(e)
+            if "stop_sequence" in args:
+                val = neox_args.tokenizer.tokenize(args["stop_sequence"])
+                if val is not None or val != []:
+                    values["eos_token_id"] = val[0]
 
             return values
 
@@ -735,7 +740,6 @@ def generate_samples_from_request(
             neox_args=neox_args,
             model=model,
             text=prompts,
-            eos_token_id=eos_token_id,
             recompute=recompute,
             **gpt_params,
         )
