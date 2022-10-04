@@ -657,6 +657,7 @@ def generate_samples_from_request(
     """
 
     QUESTION, ANSWER, PARAMS = "question.txt", "answer.txt", "params.txt"
+    SLEEP_TIME = 0.01
 
     # json parser
     parser = reqparse.RequestParser()
@@ -699,7 +700,7 @@ def generate_samples_from_request(
                 return {}
 
             while os.path.exists(QUESTION):
-                time.sleep(0.2)
+                time.sleep(SLEEP_TIME)
 
             with open(PARAMS, "w") as f:
                 f.write(json.dumps(self.gpt_params(request.args)))
@@ -709,7 +710,7 @@ def generate_samples_from_request(
 
             generated_texts = []
             while not os.path.exists(ANSWER):
-                time.sleep(0.2)
+                time.sleep(SLEEP_TIME)
 
             with open(ANSWER) as f:
                 generated_texts = json.loads(f.read())
@@ -728,7 +729,7 @@ def generate_samples_from_request(
                 return {}
 
             while os.path.exists(QUESTION):
-                time.sleep(0.2)
+                time.sleep(SLEEP_TIME)
 
             with open(PARAMS, "w") as f:
                 f.write(json.dumps(self.gpt_params(args)))
@@ -738,7 +739,7 @@ def generate_samples_from_request(
 
             generated_texts = []
             while not os.path.exists(ANSWER):
-                time.sleep(0.2)
+                time.sleep(SLEEP_TIME)
 
             with open(ANSWER) as f:
                 generated_texts = json.loads(f.read())
@@ -761,12 +762,15 @@ def generate_samples_from_request(
         threading.Thread(target=start_flask).start()
 
     while True:
-        if not os.path.exists(QUESTION):
-            time.sleep(0.2)
-            continue
+        if is_local_main():
+            if not os.path.exists(QUESTION):
+                time.sleep(SLEEP_TIME)
+                continue
+            torch.distributed.barrier(group=mpu.get_model_parallel_group())
+        else:
+            torch.distributed.barrier(group=mpu.get_model_parallel_group())
 
         model.module.clear_cache()  # clear kv cache between batches
-        torch.distributed.barrier(group=mpu.get_model_parallel_group())
 
         with open(QUESTION, "r") as f:
             prompts = f.read().strip()
@@ -788,8 +792,9 @@ def generate_samples_from_request(
                 f.write(json.dumps(data))
             os.remove(QUESTION)
             os.remove(PARAMS)
-        time.sleep(1)
-
+            torch.distributed.barrier(group=mpu.get_model_parallel_group())
+        else:
+            torch.distributed.barrier(group=mpu.get_model_parallel_group())
 
 def generate_samples_unconditional(
     neox_args,
