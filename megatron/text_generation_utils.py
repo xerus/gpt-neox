@@ -694,31 +694,6 @@ def generate_samples_from_request(
 
             return values
 
-        def get(self, context):
-            context = context.strip()
-            if context == "":
-                return {}
-
-            while os.path.exists(QUESTION):
-                time.sleep(SLEEP_TIME)
-
-            with open(PARAMS, "w") as f:
-                f.write(json.dumps(self.gpt_params(request.args)))
-
-            with open(QUESTION, "w") as f:
-                f.write(context)
-
-            generated_texts = []
-            while not os.path.exists(ANSWER):
-                time.sleep(SLEEP_TIME)
-
-            with open(ANSWER) as f:
-                generated_texts = json.loads(f.read())
-
-            os.remove(ANSWER)
-
-            return generated_texts
-
         def post(self, context=None):
             request.get_json(force=True)
             args = parser.parse_args()
