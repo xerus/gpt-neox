@@ -27,7 +27,7 @@ import torch.nn.functional as F
 
 from megatron import print_rank_0
 from megatron import mpu
-from megatron.utils import get_ltor_masks_and_position_ids, is_mp_rank_0, is_local_main
+from megatron.utils import get_ltor_masks_and_position_ids, is_mp_rank_0
 
 import threading
 from flask import Flask, request
@@ -632,6 +632,9 @@ def generate_samples_input_from_file(
     return generated_texts
 
 
+def is_the_main_process():
+    return torch.distributed.is_initialized() and torch.distributed.get_rank() == 0
+
 def generate_samples_from_request(
     neox_args,
     model,
@@ -655,8 +658,10 @@ def generate_samples_from_request(
         - 'message': a messaged associated with the generation procedure, can be a warning or error
         - 'duration_seconds': duration of the generation in seconds
     """
-
+    global QUESTION, QUESTION_READY, PARAMS, ANSWER, ANSWER_READY
     QUESTION, ANSWER, PARAMS = "question.txt", "answer.txt", "params.txt"
+    QUESTION_READY = False
+    ANSWER_READY = False
     SLEEP_TIME = 0.01
 
     # json parser
@@ -695,6 +700,7 @@ def generate_samples_from_request(
             return values
 
         def post(self, context=None):
+            global QUESTION, QUESTION_READY, PARAMS, ANSWER, ANSWER_READY
             request.get_json(force=True)
             args = parser.parse_args()
             if "prompt" in args:
@@ -703,25 +709,18 @@ def generate_samples_from_request(
             if context is None:
                 return {}
 
-            while os.path.exists(QUESTION):
+            while QUESTION_READY:
                 time.sleep(SLEEP_TIME)
 
-            with open(PARAMS, "w") as f:
-                f.write(json.dumps(self.gpt_params(args)))
-            
-            with open(QUESTION, "w") as f:
-                f.write(context)
-
-            generated_texts = []
-            while not os.path.exists(ANSWER):
+            PARAMS = self.gpt_params(args)
+            QUESTION = context
+            QUESTION_READY = True
+            while not ANSWER_READY:
                 time.sleep(SLEEP_TIME)
 
-            with open(ANSWER) as f:
-                generated_texts = json.loads(f.read())
+            ANSWER_READY = False
 
-            os.remove(ANSWER)
-
-            return generated_texts
+            return ANSWER
 
     def start_flask():
         app = Flask("gptneo")
@@ -729,29 +728,24 @@ def generate_samples_from_request(
         api.add_resource(handle, "/<string:context>")
         app.run(host="0.0.0.0", port=8000)
 
-    if is_local_main():
-        for f in [QUESTION, ANSWER, PARAMS]:
-            if os.path.exists(f):
-                os.remove(f)
-
+    if is_the_main_process():
         threading.Thread(target=start_flask).start()
 
     while True:
-        if is_local_main():
-            if not os.path.exists(QUESTION):
+        if is_the_main_process():
+            torch.distributed.barrier(group=mpu.get_complete_parallel_group())
+            while not QUESTION_READY:
                 time.sleep(SLEEP_TIME)
                 continue
-            torch.distributed.barrier(group=mpu.get_model_parallel_group())
+            objects = [QUESTION, PARAMS]
         else:
-            torch.distributed.barrier(group=mpu.get_model_parallel_group())
+            objects = [None, None]
+            torch.distributed.barrier(group=mpu.get_complete_parallel_group())
+
+        torch.distributed.broadcast_object_list(objects, group=mpu.get_complete_parallel_group())
+        prompts, gpt_params = objects
 
         model.module.clear_cache()  # clear kv cache between batches
-
-        with open(QUESTION, "r") as f:
-            prompts = f.read().strip()
-
-        with open(PARAMS, "r") as f:
-            gpt_params = json.loads(f.read())
 
         generated_texts = generate_samples_from_prompt(
             neox_args=neox_args,
@@ -761,15 +755,13 @@ def generate_samples_from_request(
             **gpt_params,
         )
 
-        if is_local_main():
-            data = generated_texts if len(generated_texts) != 1 else generated_texts[0]
-            with open(ANSWER, "w") as f:
-                f.write(json.dumps(data))
-            os.remove(QUESTION)
-            os.remove(PARAMS)
-            torch.distributed.barrier(group=mpu.get_model_parallel_group())
+        if is_the_main_process():
+            torch.distributed.barrier(group=mpu.get_complete_parallel_group())
+            ANSWER = generated_texts if len(generated_texts) != 1 else generated_texts[0]
+            ANSWER_READY = True
+            QUESTION_READY = False
         else:
-            torch.distributed.barrier(group=mpu.get_model_parallel_group())
+            torch.distributed.barrier(group=mpu.get_complete_parallel_group())
 
 def generate_samples_unconditional(
     neox_args,
