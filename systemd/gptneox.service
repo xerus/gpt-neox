@@ -1,0 +1,14 @@
+[Unit]
+Description=Run gpt-neox flask service
+DefaultDependencies=no
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/ec2-user/gpt-neox
+ExecStart=/home/ec2-user/gpt-neox/systemd/gptneox.sh
+User=ec2-user
+Group=ec2-user
+
+[Install]
+WantedBy=multi-user.target
