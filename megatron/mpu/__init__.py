@@ -20,6 +20,7 @@ from .data import broadcast_data
 
 from .initialize import is_unitialized
 from .initialize import destroy_model_parallel
+from .initialize import get_complete_parallel_group
 from .initialize import get_data_parallel_group
 from .initialize import get_data_parallel_rank
 from .initialize import get_data_parallel_world_size

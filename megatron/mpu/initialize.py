@@ -25,6 +25,8 @@ _MODEL_PARALLEL_GROUP = None
 _DATA_PARALLEL_GROUP = None
 # Pipeline parallel group that the current rank belongs to.
 _PIPE_PARALLEL_GROUP = None
+# parallel group that contains everything
+_COMPLETE_PARALLEL_GROUP = None
 
 # A group used to sync during the IO process. Usually this is data_parallel_group(),
 # but with pipeline parallelism it must also involve the last stage (which is not in the
@@ -151,6 +153,13 @@ def initialize_model_parallel(model_parallel_size, topology=None, fp32_allreduce
             if i == (rank // model_parallel_size):
                 _MODEL_PARALLEL_GROUP = group
 
+    global _COMPLETE_PARALLEL_GROUP
+    assert _COMPLETE_PARALLEL_GROUP is None, "complete parallel group is already initialized"
+    ranks = list(range(world_size))
+    _COMPLETE_PARALLEL_GROUP = torch.distributed.new_group(ranks)
+    if rank == 0:
+        print(f"MPU CP:", ranks)
+
     global _FP32_ALLREDUCE
     assert _FP32_ALLREDUCE is None, "fp32_allreduce is already initialized"
     _FP32_ALLREDUCE = fp32_allreduce
@@ -251,6 +260,12 @@ def get_pipe_parallel_group():
     """Get the pipe parallel group the caller rank belongs to."""
     assert _PIPE_PARALLEL_GROUP is not None, "data parallel group is not initialized"
     return _PIPE_PARALLEL_GROUP
+
+
+def get_complete_parallel_group():
+    """Get the complete parallel group the caller rank belongs to."""
+    assert _COMPLETE_PARALLEL_GROUP is not None, "complete parallel group is not initialized"
+    return _COMPLETE_PARALLEL_GROUP
 
 
 def get_pipe_parallel_rank():
